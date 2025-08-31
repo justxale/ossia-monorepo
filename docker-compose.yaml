@@ -1,0 +1,215 @@
+services:
+  nginx:
+    image: nginx:1.29.0-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - tracks
+      - users
+      - sync
+    depends_on:
+      users:
+        condition: service_started
+      tracks:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - ./certs/cert.pem:/etc/certs/cert.pem:ro
+      - ./certs/key.pem:/etc/certs/key.pem:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+
+  minio:
+    image: minio/minio:RELEASE.2025-05-24T17-08-30Z
+    env_file:
+      - .env
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+    expose:
+      - "9000"
+      - "9001"
+
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    command: server --address 0.0.0.0:9000 --console-address 0.0.0.0:9001 /data
+    networks:
+      - common
+
+
+  rabbitmq:
+    image: rabbitmq:4.1.1-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    expose:
+      - "15672"
+      - "5672"
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    networks:
+      - common
+
+  postgres-tracks:
+    image: postgres:17.5-alpine
+    env_file:
+      - ./pulsola-track-service/.env
+    ports:
+      - "5432:5432"
+    expose:
+      - "5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - tracks
+
+  postgres-users:
+    image: postgres:17.5-alpine
+    env_file:
+      - ./pulsola-user-service/.env
+    ports:
+      - "5433:5432"
+    expose:
+      - "5433"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - users
+
+  # grafana:
+  #   # profiles: [ "grafana" ]
+  #   image: grafana/grafana:9.1.7
+  #   # container_name: example.grafana
+  #   # hostname: example.grafana
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3001:3000"
+  #   expose:
+  #     - "3001"
+  #   networks:
+  #     - common
+  #   volumes:
+  #     - example.grafana.data:/var/lib/grafana:rw
+  #     - ./grafana/provisioning:/etc/grafana/provisioning:rw
+  #     - ./grafana/dashboards:/etc/grafana/dashboards
+  #   # environment:
+  #   #   - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+  #   #   - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+  #   #   - GF_USERS_ALLOW_SIGN_UP=false
+  #   #   - GF_DATABASE_WAL=true
+  #   #   - VIRTUAL_HOST=example.grafana
+  #   #   - NETWORK_ACCESS=internal
+  #   #   - VIRTUAL_PORT=3000
+
+  # tempo:
+  #   # profiles: [ "grafana" ]
+  #   image: grafana/tempo:2.8.0
+  #   # container_name: example.tempo
+  #   # hostname: example.tempo
+  #   command: [ "-config.file=/etc/tempo.yaml" ]
+  #   volumes:
+  #     - example.tempo.data:/var/tempo
+  #     - ./tempo.yaml:/etc/tempo.yaml
+  #   restart: unless-stopped
+  #   # ports:
+  #   #   - "3200:3200"
+  #   #   - "4317:4317"
+  #   #   - "4318:4318"
+  #   # expose:
+  #   #   - "3200"
+  #   #   - "4317"
+  #   #   - "4318"
+  #   networks:
+  #     - common
+
+  # prometheus:
+  #   image: prom/prometheus:v3.4.2
+  #   # container_name: example.prometheus
+  #   # hostname: example.prometheus
+  #   command:
+  #     - --config.file=/etc/prometheus.yaml
+  #     - --web.enable-remote-write-receiver
+  #     - --enable-feature=exemplar-storage
+  #   volumes:
+  #     - ./prometheus.yaml:/etc/prometheus.yaml
+  #   # ports:
+  #   #   - "9090:9090"
+  #   # expose:
+  #   #   - "9090"
+  #   networks:
+  #     - common
+
+  tracks:
+    build:
+      context: pulsola-track-service
+    env_file:
+      - ./pulsola-track-service/.env
+      - .env
+    depends_on:
+      postgres-tracks:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tracks
+      - common
+
+  users:
+    build:
+      context: pulsola-user-service
+    env_file:
+      - ./pulsola-user-service/.env
+      - .env
+    depends_on:
+      postgres-users:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - users
+      - common
+
+  sync:
+    build:
+      context: pulsola-sync-service
+    env_file:
+      - ./pulsola-sync-service/.env
+      - .env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - common
+      - sync
+
+volumes:
+  example.grafana.data: {}
+  example.rabbit.data: {}
+  example.tempo.data: {}
+
+networks:
+  users:
+    driver: bridge
+  tracks:
+    driver: bridge
+  tele:
+    driver: bridge
+  common:
+    driver: bridge
+  sync:
+    driver: bridge

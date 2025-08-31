@@ -1,0 +1,11 @@
+#root {
+    min-height: 100vh;
+}
+
+html, body {
+    background-color: var(--color-surface-200);
+}
+
+.dark-mode body {
+    background-color: var(--color-surface-800);
+}
