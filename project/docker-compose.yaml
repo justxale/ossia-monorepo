@@ -1,0 +1,145 @@
+services:
+  nginx:
+    image: nginx:1.29.0-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - tracks
+      - users
+      - sync
+    depends_on:
+      users:
+        condition: service_started
+      tracks:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - ./certs/cert.pem:/etc/certs/cert.pem:ro
+      - ./certs/key.pem:/etc/certs/key.pem:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+
+  minio:
+    image: minio/minio:RELEASE.2025-05-24T17-08-30Z
+    env_file:
+      - .env
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+    expose:
+      - "9000"
+      - "9001"
+
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    command: server --address 0.0.0.0:9000 --console-address 0.0.0.0:9001 /data
+    networks:
+      - common
+
+
+  rabbitmq:
+    image: rabbitmq:4.1.1-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    expose:
+      - "15672"
+      - "5672"
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    networks:
+      - common
+
+  postgres-tracks:
+    image: postgres:17.5-alpine
+    env_file:
+      - ./ossia-track-service/.env
+    ports:
+      - "5432:5432"
+    expose:
+      - "5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - tracks
+
+  postgres-users:
+    image: postgres:17.5-alpine
+    env_file:
+      - ./ossia-user-service/.env
+    ports:
+      - "5433:5432"
+    expose:
+      - "5433"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - users
+
+  tracks:
+    build:
+      context: ossia-track-service
+    env_file:
+      - ./ossia-track-service/.env
+      - .env
+    depends_on:
+      postgres-tracks:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tracks
+      - common
+
+  users:
+    build:
+      context: ossia-user-service
+    env_file:
+      - ./ossia-user-service/.env
+      - .env
+    depends_on:
+      postgres-users:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - users
+      - common
+
+  sync:
+    build:
+      context: ossia-sync-service
+    env_file:
+      - ./ossia-sync-service/.env
+      - .env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - common
+      - sync
+
+networks:
+  users:
+    driver: bridge
+  tracks:
+    driver: bridge
+  common:
+    driver: bridge
+  sync:
+    driver: bridge
